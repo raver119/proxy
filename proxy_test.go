@@ -1,14 +1,14 @@
 package proxy
 
-
 import (
 	"context"
 	"fmt"
+	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/require"
 	"math/rand"
 	"net/http"
-	"strconv"
+	"net/http/httptest"
 	"testing"
 	"time"
 )
@@ -16,10 +16,10 @@ import (
 const content = "<html><body>BODY</body>"
 
 func TestProxy_Cache(t *testing.T) {
-	p := NewProxy("localhost", 86400, 1000 * time.Millisecond)
+	p := NewProxy("localhost", 86400, 1000*time.Millisecond)
 
 	rand.Seed(time.Now().Unix())
-	pid := int64(RandInRange(1, 1000000) * -1)
+	pid := uuid.NewString()
 
 	require.False(t, p.HasInCache(pid), "Has %v", pid)
 
@@ -40,16 +40,15 @@ func TestProxy_Cache(t *testing.T) {
 
 func TestProxy_Resolve(t *testing.T) {
 	rand.Seed(time.Now().Unix())
-	pid := int64(RandInRange(1, 1000000) * -1)
-	pid2 := int64(RandInRange(1000000, 2000000) * -1)
+	pid := uuid.NewString()
+	pid2 := uuid.NewString()
 
 	testRouter := mux.NewRouter()
 	testRouter.PathPrefix("/page").Queries("pageId", "{pageId}").
 		HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			p := mux.Vars(r)["pageId"]
-			pageId, _ := strconv.Atoi(p)
+			pageId := mux.Vars(r)["pageId"]
 
-			if int64(pageId) == pid {
+			if pageId == pid {
 				fmt.Printf("test server was invoked: %v\n", r.Method)
 				_, _ = w.Write([]byte(content))
 			} else {
@@ -57,19 +56,12 @@ func TestProxy_Resolve(t *testing.T) {
 			}
 		})
 
-	srv := &http.Server{
-		Addr:    ":39012",
-		Handler: testRouter,
-	}
+	srv := httptest.NewServer(testRouter)
+	defer srv.Close()
 
-	go func() {
-		_ = srv.ListenAndServe()
-	}()
+	p := NewProxy("localhost", 86400, 1000*time.Millisecond)
 
-	time.Sleep(7 * time.Second)
-	p := NewProxy("localhost", 86400, 1000 * time.Millisecond)
-
-	html, err := p.Resolve(pid, fmt.Sprintf("http://localhost:39012/page?pageId=%v", pid))
+	html, err := p.Resolve(context.Background(), fmt.Sprintf("%v/page?pageId=%v", srv.URL, pid), pid)
 	require.NoError(t, err)
 	require.Equal(t, content, html)
 
@@ -80,9 +72,6 @@ func TestProxy_Resolve(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, content, html2)
 
-	html, err = p.Resolve(pid2, fmt.Sprintf("http://localhost:39012/page?pageId=%v", pid2))
+	html, err = p.Resolve(context.Background(), pid2, fmt.Sprintf("http://localhost:39012/page?pageId=%v", pid2))
 	require.Error(t, err)
-
-	_ = srv.Shutdown(context.TODO())
 }
-
