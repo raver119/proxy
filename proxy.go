@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"fmt"
 	"github.com/bradfitz/gomemcache/memcache"
 	"github.com/go-resty/resty/v2"
@@ -15,8 +16,8 @@ type Proxy struct {
 	m *memcache.Client
 }
 
-func pageKey(pageId int64) string {
-	return fmt.Sprintf("ProxyPageCache_%v", pageId)
+func pageKey(keys ...string) string {
+	return fmt.Sprintf("ProxyPageCache_%v", keys)
 }
 
 func NewProxy(mc string, expiration int32, timeOut time.Duration) Proxy {
@@ -36,14 +37,15 @@ func NewProxy(mc string, expiration int32, timeOut time.Duration) Proxy {
 }
 
 // Resolve
+//
 //	This method fetches HTML from the remote URL. Or from shared cache.
-func (p *Proxy) Resolve(pageId int64, url string) (html string, err error) {
-	if html, err = p.ReadFromCache(pageId); err == nil {
+func (p *Proxy) Resolve(ctx context.Context, url string, keys ...string) (html string, err error) {
+	if html, err = p.ReadFromCache(keys...); err == nil {
 		// serve from the local cache
 		return
 	} else {
 		// TODO: add performance logging here
-		get, err := p.c.R().Get(url)
+		get, err := p.c.R().SetContext(ctx).Get(url)
 		if err != nil {
 			// TODO: timeout errors are very bad, and must be tracked here
 			if IsVerbose() {
@@ -54,7 +56,7 @@ func (p *Proxy) Resolve(pageId int64, url string) (html string, err error) {
 
 		if get.IsSuccess() {
 			html = get.String()
-			_ = p.Cache(html, pageId)
+			_ = p.Cache(html, keys...)
 			return html, nil
 		} else {
 			if IsVerbose() {
@@ -67,23 +69,26 @@ func (p *Proxy) Resolve(pageId int64, url string) (html string, err error) {
 }
 
 // Forget
+//
 //	This method removes given pageId from the cache
-func (p *Proxy) Forget(pageId int64) {
-	_ = p.m.Delete(pageKey(pageId))
+func (p *Proxy) Forget(keys ...string) {
+	_ = p.m.Delete(pageKey(keys...))
 }
 
 // HasInCache
+//
 //	This method checks if a given pageId is available in cache
-func (p *Proxy) HasInCache(pageId int64) bool {
-	item, err := p.m.Get(pageKey(pageId))
+func (p *Proxy) HasInCache(keys ...string) bool {
+	item, err := p.m.Get(pageKey(keys...))
 	return err == nil && item != nil
 }
 
 // Cache
+//
 //	This method injects given html into cache
-func (p *Proxy) Cache(html string, pageId int64) (err error) {
+func (p *Proxy) Cache(html string, keys ...string) (err error) {
 	err = p.m.Set(&memcache.Item{
-		Key:        pageKey(pageId),
+		Key:        pageKey(keys...),
 		Value:      []byte(html),
 		Expiration: p.e, // two weeks by default
 	})
@@ -92,9 +97,10 @@ func (p *Proxy) Cache(html string, pageId int64) (err error) {
 }
 
 // ReadFromCache
+//
 //	This method returns previously cached page
-func (p *Proxy) ReadFromCache(pageId int64) (html string, err error) {
-	item, err := p.m.Get(pageKey(pageId))
+func (p *Proxy) ReadFromCache(keys ...string) (html string, err error) {
+	item, err := p.m.Get(pageKey(keys...))
 	if err != nil {
 		return "", err
 	}
@@ -102,4 +108,3 @@ func (p *Proxy) ReadFromCache(pageId int64) (html string, err error) {
 	html = string(item.Value)
 	return
 }
-
